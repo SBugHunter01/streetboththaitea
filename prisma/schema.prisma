@@ -1,0 +1,296 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum CategoryType {
+  product
+  expense
+}
+
+enum PaymentMethod {
+  CASH
+  QRIS
+  TRANSFER
+  OTHER
+}
+
+enum SaleStatus {
+  COMPLETED
+  VOIDED
+}
+
+enum MovementType {
+  stock_in
+  stock_out
+  adjustment
+}
+
+enum MovementReference {
+  purchase
+  sale
+  manual
+  production
+}
+
+// Rekening alokasi tempat pengeluaran sebuah kategori dibebankan.
+enum FundAccount {
+  operational
+  payroll
+  emergency
+}
+
+model User {
+  id            String    @id
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  role          String    @default("cashier")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  sessions      Session[]
+  accounts      Account[]
+  sales         Sale[]
+  expenses      Expense[]
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Account {
+  id                    String    @id
+  issuer                String
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Category {
+  id        String       @id @default(cuid())
+  name      String
+  type      CategoryType
+  account   FundAccount  @default(operational)
+  isInventoryPurchase Boolean @default(false)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  products  Product[]
+  expenses  Expense[]
+}
+
+// Satu baris (id "default"): persentase pembagian sisa laba kotor ke tiga rekening.
+model AllocationSetting {
+  id             String   @id @default("default")
+  operationalPct Int
+  payrollPct     Int
+  emergencyPct   Int
+  updatedAt      DateTime @updatedAt
+}
+
+model Product {
+  id           String           @id @default(cuid())
+  categoryId   String
+  category     Category         @relation(fields: [categoryId], references: [id])
+  sku          String           @unique
+  name         String
+  description  String?
+  imageUrl     String?
+  sellingPrice Int
+  hpp          Int              @default(0)
+  isActive     Boolean          @default(true)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  recipes      ProductRecipe[]
+  saleItems    SaleItem[]
+  toppings     ProductTopping[]
+
+  @@index([isActive, name])
+}
+
+model Ingredient {
+  id            String              @id @default(cuid())
+  name          String              @unique
+  unit          String
+  costPerUnit   Int
+  currentStock  Float               @default(0)
+  minimumStock  Float               @default(0)
+  isActive      Boolean             @default(true)
+  packPrice     Int?
+  packSize      Float?
+  kind          String?
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  recipes       ProductRecipe[]
+  movements     InventoryMovement[]
+  batchOutputs  BatchTemplate[]     @relation("BatchOutput")
+  batchInputs   BatchComponent[]
+  productToppings ProductTopping[]
+  saleItemToppings SaleItemTopping[]
+
+  @@index([isActive, name])
+}
+
+model ProductRecipe {
+  id           String     @id @default(cuid())
+  productId    String
+  ingredientId String
+  quantity     Float
+  createdAt    DateTime   @default(now())
+  product      Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id])
+
+  @@unique([productId, ingredientId])
+}
+
+model BatchTemplate {
+  id                 String           @id @default(cuid())
+  name               String           @unique
+  outputIngredientId String
+  outputIngredient   Ingredient       @relation("BatchOutput", fields: [outputIngredientId], references: [id])
+  outputQuantity     Float
+  createdAt          DateTime         @default(now())
+  components         BatchComponent[]
+}
+
+model BatchComponent {
+  id           String        @id @default(cuid())
+  templateId   String
+  template     BatchTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  ingredientId String
+  ingredient   Ingredient    @relation(fields: [ingredientId], references: [id])
+  quantity     Float
+
+  @@unique([templateId, ingredientId])
+}
+
+model ProductTopping {
+  id           String     @id @default(cuid())
+  productId    String
+  product      Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  ingredientId String
+  ingredient   Ingredient @relation(fields: [ingredientId], references: [id])
+  quantity     Float
+  extraPrice   Int
+
+  @@unique([productId, ingredientId])
+}
+
+model Sale {
+  id            String        @id @default(cuid())
+  invoiceNumber String        @unique
+  userId        String
+  user          User          @relation(fields: [userId], references: [id])
+  subtotal      Int
+  total         Int
+  totalHpp      Int
+  grossProfit   Int
+  paymentMethod PaymentMethod
+  status        SaleStatus    @default(COMPLETED)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  items         SaleItem[]
+
+  @@index([createdAt])
+  @@index([userId])
+  @@index([status, createdAt])
+}
+
+model SaleItem {
+  id                  String            @id @default(cuid())
+  saleId              String
+  productId           String?
+  product             Product?          @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productNameSnapshot String
+  quantity            Int
+  sellingPrice        Int
+  hpp                 Int
+  subtotal            Int
+  totalHpp            Int
+  grossProfit         Int
+  sale                Sale              @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  toppings            SaleItemTopping[]
+
+  @@index([saleId])
+  @@index([productId])
+}
+
+model SaleItemTopping {
+  id             String      @id @default(cuid())
+  saleItemId     String
+  saleItem       SaleItem    @relation(fields: [saleItemId], references: [id], onDelete: Cascade)
+  ingredientId   String?
+  ingredient     Ingredient? @relation(fields: [ingredientId], references: [id], onDelete: SetNull)
+  ingredientName String
+  quantity       Float
+  unitCost       Int
+  extraPrice     Int
+}
+
+model Expense {
+  id            String        @id @default(cuid())
+  categoryId    String
+  userId        String
+  user          User          @relation(fields: [userId], references: [id])
+  amount        Int
+  description   String?
+  paymentMethod PaymentMethod @default(OTHER)
+  expenseDate   DateTime
+  notes         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  category      Category      @relation(fields: [categoryId], references: [id])
+
+  @@index([expenseDate])
+  @@index([userId])
+  @@index([categoryId, expenseDate])
+}
+
+model InventoryMovement {
+  id            String            @id @default(cuid())
+  ingredientId  String
+  type          MovementType
+  quantity      Float
+  unitCost      Int
+  referenceType MovementReference
+  referenceId   String?
+  notes         String?
+  createdAt     DateTime          @default(now())
+  createdBy     String?
+  ingredient    Ingredient        @relation(fields: [ingredientId], references: [id])
+
+  @@index([ingredientId, createdAt])
+  @@index([ingredientId, referenceId])
+  @@index([type, createdAt])
+}
